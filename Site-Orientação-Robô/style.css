@@ -1,0 +1,142 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Segoe UI", Arial, sans-serif;
+  background: #eef3f8;
+  color: #1f2937;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.container {
+  background: #ffffff;
+  width: 100%;
+  max-width: 380px;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  padding: 28px 24px;
+  text-align: center;
+}
+
+h1 {
+  font-size: 26px;
+  color: #1d4ed8;
+}
+
+.escola {
+  font-size: 14px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+/* ===== MAPA ===== */
+.mapa {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1041 / 773; /* proporcao da imagem de satelite */
+  margin: 22px 0;
+  border-radius: 14px;
+  /* imagem de satelite do CIMOL (Google Maps) */
+  background-image: url("cimol.png");
+  background-size: cover;
+  background-position: center;
+  border: 2px solid #dfe6ef;
+  overflow: hidden;
+}
+
+.trilha {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ponto {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 3px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.rotulo {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+/* Usuario (preto) - na entrada da escola (R. Guilherme Lahm) */
+.usuario {
+  background: #111827;
+  left: 37%;
+  top: 50%;
+}
+
+/* Robo (vermelho) - comeca dentro do predio do CIMOL */
+.robo {
+  background: #dc2626;
+  left: 63%;
+  top: 45%;
+  /* animacao suave ao mudar de posicao */
+  transition: left 1.2s ease-in-out, top 1.2s ease-in-out;
+}
+
+.robo.pulsando {
+  animation: pulso 0.9s infinite;
+}
+
+@keyframes pulso {
+  0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5); }
+  100% { box-shadow: 0 0 0 14px rgba(220, 38, 38, 0); }
+}
+
+/* ===== BOTAO ===== */
+.botao-chamar {
+  width: 100%;
+  padding: 20px;
+  font-size: 19px;
+  font-weight: bold;
+  color: #ffffff;
+  background: #1d4ed8;
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.2s;
+}
+
+.botao-chamar:hover { background: #1e40af; }
+.botao-chamar:active { transform: scale(0.97); }
+.botao-chamar:disabled { background: #9ca3af; cursor: not-allowed; }
+
+.status {
+  margin-top: 18px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #16a34a;
+}
+
+.status.chamando { color: #d97706; }
+.status.chegou { color: #1d4ed8; }
+
+.rodape {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 16px;
+}

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chamar Robo - ETEC Monteiro Lobato</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <header class="cabecalho">
+      <h1>Chamar Robo</h1>
+      <p class="escola">ETEC Estadual Monteiro Lobato</p>
+    </header>
+
+    <section class="mapa" id="mapa">
+      <!-- Trajeto que o robo vai percorrer -->
+      <svg class="trilha" viewBox="0 0 300 300" preserveAspectRatio="none">
+        <path id="caminho" d="M 189 135 L 189 150 L 123 150"
+              fill="none" stroke="#facc15" stroke-width="4"
+              stroke-dasharray="6 6" stroke-linecap="round"/>
+      </svg>
+
+      <!-- Ponto do usuario (preto) -->
+      <div class="ponto usuario" id="usuario">
+        <span class="rotulo">Voce</span>
+      </div>
+
+      <!-- Ponto do robo (vermelho) -->
+      <div class="ponto robo" id="robo">
+        <span class="rotulo">Robo</span>
+      </div>
+    </section>
+
+    <section class="painel">
+      <button id="botaoChamar" class="botao-chamar">CHAMAR ROBO</button>
+      <p id="status" class="status">Robo disponivel</p>
+    </section>
+
+    <footer class="rodape">
+      <p>Prototipo - TCC</p>
+    </footer>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
