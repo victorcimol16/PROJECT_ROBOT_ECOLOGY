@@ -1,4 +1,5 @@
 import time
+import traceback
 
 import cv2
 from ultralytics import YOLO
@@ -14,6 +15,20 @@ CONF = 0.45
 FRAME_SKIP = 3  # roda a deteccao a cada N frames (reaproveita a ultima deteccao nos demais)
 
 PINOS = {"base": 11, "ombro": 10, "ante": 9, "garra": 6}
+
+# sensor ultrassonico HC-SR04 (mede a distancia ate o objeto pra calcular a descida)
+PINO_TRIG = 12
+PINO_ECHO = 13
+DIST_MIN_CM, DIST_MAX_CM = 4, 40   # faixa util de leitura (fora disso = leitura descartada)
+AMOSTRAS_DISTANCIA = 5             # numero de leituras pra tirar a mediana e filtrar ruido
+DIST_MAX_COLETA = 14.0             # objeto acima disso e IGNORADO (nao entra em modo de coleta)
+AJUSTE_COLETA_CM = 0.5             # desconto aplicado a distancia medida antes de calcular a descida
+
+# aproximacao gradual da garra: em vez de ir direto pros angulos do objeto, comeca
+# recuada e avanca ate a medida real (ex.: comeca em 10cm e desliza ate 12cm)
+APROX_INICIO_CM = 2.0       # o quanto a garra comeca recuada antes da distancia do objeto
+APROX_ATRASO_FINAL = 0.05   # atraso por passo no trecho final (recuado -> objeto); maior = mais lento
+APROX_SUBPASSOS = 6         # sub-passos por grau no pouso final; maior = mais fino/suave (pousa em vez de cair)
 
 # angulos de repouso / trabalho de cada servo
 ANGULO_BASE_INICIAL = 90
@@ -38,10 +53,42 @@ MAX_REVERSOES = 4                # reversoes de sentido em pouco tempo = oscilac
 JANELA_REVERSAO = 3.0
 COOLDOWN_OSCILACAO = 1.5         # pausa pra deixar o servo descansar apos oscilar demais
 
+# recuperacao de falha de comunicacao com o Arduino
+TENTATIVAS_CONEXAO = 3           # tentativas por (re)conexao
+ESPERA_RECONEXAO = 2.0           # segundos entre tentativas (da tempo do Arduino reiniciar)
+MAX_FALHAS_SEGUIDAS = 3          # ciclos falhando seguido antes de desistir (provavel problema fisico)
+
+
 # =========================
-# ARDUINO / SERVOS (pymata4 + firmware FirmataExpress)
+# CONEXAO COM O ARDUINO
 # =========================
-board = Pymata4(com_port=PORTA)
+board = None  # sera preenchido por conectar_board(); pode ser recriado numa reconexao
+
+
+def conectar_board(tentativas=TENTATIVAS_CONEXAO):
+    """
+    (Re)conecta no Arduino e configura o sonar, com algumas tentativas.
+    Atualiza o global `board`. Retorna True/False.
+    Captura ate SystemExit porque o pymata4 pode chamar sys.exit() ao falhar na serial.
+    """
+    global board
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            board = Pymata4(com_port=PORTA)
+            # sonar: dispara no TRIG e mede o retorno no ECHO. A leitura roda numa thread
+            # de fundo do pymata4; sonar_read() devolve sempre a ultima medida em cache.
+            board.set_pin_mode_sonar(PINO_TRIG, PINO_ECHO)
+            time.sleep(0.2)  # da tempo do primeiro ciclo de leitura popular o cache
+            return True
+        except (Exception, SystemExit) as err:
+            ultimo_erro = err
+            print(f"[conexao] tentativa {tentativa}/{tentativas} em {PORTA} falhou: {err!r}")
+            board = None
+            time.sleep(ESPERA_RECONEXAO)
+    print(f"[conexao] nao consegui conectar em {PORTA}. Ultimo erro: {ultimo_erro!r}")
+    return False
+
 
 angulo_atual = {
     "base": ANGULO_BASE_INICIAL,
@@ -51,6 +98,9 @@ angulo_atual = {
 }
 
 
+# =========================
+# CONTROLE DOS SERVOS
+# =========================
 def ligar(nome):
     """Reativa o servo (modo servo) na posicao em que ele estava."""
     board.set_pin_mode_servo(PINOS[nome])
@@ -61,6 +111,15 @@ def desligar(nome):
     """Corta o PWM do servo - sem torque, sem aquecer/estressar parado."""
     board.set_pin_mode_digital_output(PINOS[nome])
     board.digital_write(PINOS[nome], 0)
+
+
+def desligar_todos():
+    """Corta o PWM de todos os servos (usado na finalizacao e na recuperacao)."""
+    for nome in ("base", "ombro", "ante", "garra"):
+        try:
+            desligar(nome)
+        except (Exception, SystemExit):
+            pass  # se a placa ja caiu, nao adianta insistir
 
 
 def mover_suave(nome, alvo, atraso=ATRASO_PASSO):
@@ -75,12 +134,19 @@ def mover_suave(nome, alvo, atraso=ATRASO_PASSO):
     angulo_atual[nome] = alvo
 
 
-def mover_dois_suave(nome1, alvo1, nome2, alvo2, passos=PASSOS_MOVIMENTO, atraso=ATRASO_PASSO):
-    """Move dois servos juntos e de forma coordenada (ex.: ombro + antebraco)."""
+def mover_dois_suave(nome1, alvo1, nome2, alvo2, passos=None, atraso=ATRASO_PASSO):
+    """
+    Move dois servos juntos e de forma coordenada (ex.: ombro + antebraco).
+    Se passos=None, usa rampa proporcional: ~1 passo por grau do servo que se move
+    mais - evita escrever dezenas de vezes a toa em movimentos pequenos (menos
+    trafego na serial), mantendo a suavidade em movimentos grandes.
+    """
     pino1, pino2 = PINOS[nome1], PINOS[nome2]
     board.set_pin_mode_servo(pino1)
     board.set_pin_mode_servo(pino2)
     inicio1, inicio2 = angulo_atual[nome1], angulo_atual[nome2]
+    if passos is None:
+        passos = max(1, int(round(max(abs(alvo1 - inicio1), abs(alvo2 - inicio2)))))
     for i in range(passos + 1):
         fracao = i / passos
         board.servo_write(pino1, int(inicio1 + (alvo1 - inicio1) * fracao))
@@ -107,34 +173,111 @@ def fechar_garra():
     mover_suave("garra", GARRA_FECHADA)
 
 
-# posiciona tudo uma vez e desliga o que fica ocioso ate o primeiro ciclo de coleta
-ligar("base")
-ligar("ombro")
-ligar("ante")
-ligar("garra")
-time.sleep(0.3)
-desligar("ombro")
-desligar("ante")
-desligar("garra")
+def posicionar_inicial():
+    """Coloca os servos numa postura conhecida e desliga os ociosos ate a 1a coleta."""
+    angulo_atual.update({
+        "base": ANGULO_BASE_INICIAL,
+        "ombro": ANGULO_OMBRO_REPOUSO,
+        "ante": ANGULO_ANTE_REPOUSO,
+        "garra": GARRA_ABERTA,
+    })
+    ligar("base")
+    ligar("ombro")
+    ligar("ante")
+    ligar("garra")
+    time.sleep(0.3)
+    desligar("ombro")
+    desligar("ante")
+    desligar("garra")
+    # a base fica ligada durante a busca
+
+
+def recuperar_board():
+    """
+    Chamado quando a comunicacao com o Arduino cai no meio da operacao.
+    Fecha a conexao antiga, reconecta e reposiciona. Retorna True se recuperou.
+    """
+    global board
+    try:
+        board.shutdown()
+    except (Exception, SystemExit):
+        pass
+    time.sleep(1.0)
+    if not conectar_board():
+        return False
+    try:
+        posicionar_inicial()
+    except (Exception, SystemExit):
+        return False
+    return True
+
 
 # =========================
-# YOLO + CAMERA
+# SENSOR / CALCULO DE ANGULOS
 # =========================
-model = YOLO(MODEL_PATH)
+def ler_distancia():
+    """
+    Le o sensor ultrassonico varias vezes e retorna a mediana em cm,
+    descartando leituras fora da faixa util. Retorna None se nenhuma leitura
+    valida (objeto fora de alcance / sensor sem eco).
+    """
+    amostras = []
+    for _ in range(AMOSTRAS_DISTANCIA):
+        try:
+            leitura = board.sonar_read(PINO_TRIG)
+        except Exception:
+            leitura = None
+        # sonar_read pode devolver [dist, ts], None ou lista vazia dependendo da versao/estado
+        valor = leitura[0] if leitura else None
+        if valor and DIST_MIN_CM <= valor <= DIST_MAX_CM:
+            amostras.append(valor)
+        time.sleep(0.05)
+    if not amostras:
+        return None
+    amostras.sort()
+    return amostras[len(amostras) // 2]
 
-cap = cv2.VideoCapture(CAMERA, cv2.CAP_DSHOW)
-if not cap.isOpened():
-    raise RuntimeError(
-        f"Nao foi possivel abrir a camera de indice {CAMERA}. "
-        "Tente outro valor para CAMERA (0, 1, 2...) ou verifique se a webcam esta conectada."
-    )
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
 
-cv2.namedWindow("ROBO", cv2.WINDOW_NORMAL)
-cv2.resizeWindow("ROBO", 640, 360)
+def angulos_por_formula(alcance_cm):
+    """Converte a distancia medida (cm) nos angulos de antebraco e ombro da coleta."""
+    ombro = 126.1 + 3.80 * alcance_cm
+    ante = -32.3 + 8.13 * alcance_cm
+    return round(ante), round(ombro)
 
 
+def _clamp180(ang):
+    """Mantem o angulo dentro do curso mecanico do servo (evita forcar o batente)."""
+    return max(0, min(180, ang))
+
+
+def descer_ate_objeto(distancia_alvo, atraso=0.03):
+    """
+    Desce ate o objeto em duas etapas:
+      1) rampa proporcional ate a postura recuada (APROX_INICIO_CM antes do alvo);
+      2) POUSO FINAL lento e fino (recuado -> objeto) pra encostar de leve, nao cair em cima.
+    Como a formula e linear na distancia, a 2a etapa equivale a percorrer 10 -> 12 cm.
+    """
+    inicio_cm = max(DIST_MIN_CM, distancia_alvo - APROX_INICIO_CM)
+
+    ante_rec, ombro_rec = angulos_por_formula(inicio_cm)
+    ante_alvo, ombro_alvo = angulos_por_formula(distancia_alvo)
+
+    ante_rec, ombro_rec = _clamp180(ante_rec), _clamp180(ombro_rec)
+    ante_alvo, ombro_alvo = _clamp180(ante_alvo), _clamp180(ombro_alvo)
+
+    # 1) desce ate a postura recuada (rampa proporcional, rapida o suficiente)
+    mover_dois_suave("ombro", ombro_rec, "ante", ante_rec, atraso=atraso)
+
+    # 2) pouso final: muitos sub-passos (APROX_SUBPASSOS por grau), devagar
+    graus = max(abs(ombro_alvo - ombro_rec), abs(ante_alvo - ante_rec))
+    passos_final = max(1, int(round(graus * APROX_SUBPASSOS)))
+    mover_dois_suave("ombro", ombro_alvo, "ante", ante_alvo,
+                     passos=passos_final, atraso=APROX_ATRASO_FINAL)
+
+
+# =========================
+# VISAO (YOLO)
+# =========================
 def detectar_objeto(frame):
     """Roda o YOLO no frame e retorna a caixa (x1, y1, x2, y2) da 1a deteccao, ou None."""
     res = model.predict(frame, conf=CONF, verbose=False)[0]
@@ -168,9 +311,6 @@ def resetar_busca():
         "em_cooldown": False,
         "fim_cooldown": 0,
     })
-
-
-resetar_busca()
 
 
 def processar_busca(pos):
@@ -233,8 +373,12 @@ def processar_busca(pos):
 # =========================
 # SEQUENCIA DE COLETA
 # =========================
-def executar_coleta_e_descarte():
-    """Desce, fecha a garra, sobe, leva ate o ponto de descarte e solta o objeto."""
+def executar_coleta_e_descarte(distancia):
+    """
+    Desce, fecha a garra, sobe, leva ate o ponto de descarte e solta o objeto.
+    `distancia` e a distancia (cm) ja medida no alinhamento. A descida usa essa
+    distancia com um desconto de AJUSTE_COLETA_CM.
+    """
     print("Alinhado! Pegando objeto...")
     ligar("ombro")
     ligar("ante")
@@ -243,15 +387,19 @@ def executar_coleta_e_descarte():
     abrir_garra()
     time.sleep(1)
 
-    mover_dois_suave("ombro", ANGULO_OMBRO_BAIXO, "ante", ANGULO_ANTE_BAIXO)
+    # aplica o desconto e desce se aproximando de pouco em pouco ate o objeto
+    alvo_cm = max(DIST_MIN_CM, distancia - AJUSTE_COLETA_CM)
+    print(f"Distancia: {distancia:.1f} cm (ajustada p/ {alvo_cm:.1f} cm) -> aproximando gradualmente")
+    descer_ate_objeto(alvo_cm)
     time.sleep(1)
 
     fechar_garra()
     time.sleep(1)
 
-    # subida e contra o peso do braco+garra+objeto (mais exigente que descer, que tem
-    # ajuda da gravidade) - vai mais devagar pra dar margem de torque ao servo
+    # subida: contra o peso do braco+garra+objeto (mais exigente que descer) - vai mais
+    # devagar pra dar margem de torque ao servo e reduzir o pico de corrente
     mover_dois_suave("ombro", ANGULO_OMBRO_REPOUSO, "ante", ANGULO_ANTE_REPOUSO, atraso=0.04)
+    time.sleep(0.3)
     print("Objeto pego! Levando ate o ponto de descarte...")
 
     ligar("base")
@@ -265,11 +413,44 @@ def executar_coleta_e_descarte():
     mover_suave("base", ANGULO_BASE_INICIAL)
     time.sleep(0.3)  # da tempo do servo terminar de girar antes de cortar a energia
 
-    for nome in ("base", "ombro", "ante", "garra"):
-        desligar(nome)
-
+    desligar_todos()
     print("Objeto solto! Voltando a procurar...")
 
+
+# =========================
+# INICIALIZACAO
+# =========================
+if not conectar_board():
+    input(
+        f"\nFalha ao conectar no Arduino em {PORTA}.\n"
+        "Confira a porta COM, se o FirmataExpress esta gravado e se nada mais usa a porta.\n"
+        "Pressione ENTER para fechar..."
+    )
+    raise SystemExit(1)
+
+print("Carregando modelo YOLO...")
+model = YOLO(MODEL_PATH)
+
+cap = cv2.VideoCapture(CAMERA, cv2.CAP_DSHOW)
+if not cap.isOpened():
+    try:
+        board.shutdown()
+    except (Exception, SystemExit):
+        pass
+    input(
+        f"\nNao foi possivel abrir a camera de indice {CAMERA}.\n"
+        "Tente outro valor para CAMERA (0, 1, 2...) ou verifique se a webcam esta conectada.\n"
+        "Pressione ENTER para fechar..."
+    )
+    raise SystemExit(1)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+
+cv2.namedWindow("ROBO", cv2.WINDOW_NORMAL)
+cv2.resizeWindow("ROBO", 640, 360)
+
+posicionar_inicial()
+resetar_busca()
 
 # =========================
 # LOOP PRINCIPAL
@@ -277,60 +458,115 @@ def executar_coleta_e_descarte():
 frame_count = 0
 ultima_deteccao = None
 modo = "procurando"
+distancia_coleta = None  # distancia medida no alinhamento, usada pela coleta
+falhas_seguidas = 0  # ciclos com falha de placa seguidos (sem uma coleta bem-sucedida no meio)
 
-while True:
-    ok, frame = cap.read()
-    if not ok:
-        break
+try:
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            print("Falha ao ler frame da camera -> encerrando.")
+            break
 
-    altura, largura, _ = frame.shape
+        altura, largura, _ = frame.shape
 
-    zona_meio = int(largura * 0.2)
-    centro = largura // 2
-    limite_esq = centro - zona_meio // 2
-    limite_dir = centro + zona_meio // 2
+        zona_meio = int(largura * 0.2)
+        centro = largura // 2
+        limite_esq = centro - zona_meio // 2
+        limite_dir = centro + zona_meio // 2
 
-    frame_count += 1
-    if frame_count % FRAME_SKIP == 0:
-        ultima_deteccao = detectar_objeto(frame)
+        frame_count += 1
+        if frame_count % FRAME_SKIP == 0:
+            ultima_deteccao = detectar_objeto(frame)
 
-    annotated = frame.copy()
-    pos = "SEM DETECCAO"
+        annotated = frame.copy()
+        pos = "SEM DETECCAO"
 
-    if ultima_deteccao is not None:
-        x1, y1, x2, y2 = ultima_deteccao
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        if ultima_deteccao is not None:
+            x1, y1, x2, y2 = ultima_deteccao
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        cx = (x1 + x2) // 2
-        pos = classificar_posicao(cx, limite_esq, limite_dir)
+            cx = (x1 + x2) // 2
+            pos = classificar_posicao(cx, limite_esq, limite_dir)
 
-        cv2.putText(annotated, pos, (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(annotated, pos, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-        if modo == "procurando" and processar_busca(pos):
-            modo = "pegando"
-    else:
-        print("Nada detectado")
+        # --- tudo que fala com o Arduino fica protegido: se a comunicacao cair
+        #     (reset por brownout, cabo, etc.), reconecta e volta a procurar
+        #     em vez de matar o programa em silencio (SystemExit do pymata4) ---
+        try:
+            if ultima_deteccao is not None and modo == "procurando":
+                if processar_busca(pos):
+                    # alinhado: mede a distancia e so coleta se o objeto estiver perto o bastante
+                    distancia = ler_distancia()
+                    if distancia is None:
+                        print("Alinhado, mas sem leitura de distancia -> ignorando objeto")
+                    elif distancia > DIST_MAX_COLETA:
+                        print(f"Objeto a {distancia:.1f} cm (> {DIST_MAX_COLETA:.0f} cm) -> ignorando")
+                    else:
+                        distancia_coleta = distancia
+                        modo = "pegando"
 
-    if modo == "pegando":
-        executar_coleta_e_descarte()
-        ultima_deteccao = None
-        resetar_busca()
-        modo = "procurando"
+            if modo == "pegando":
+                executar_coleta_e_descarte(distancia_coleta)
+                ultima_deteccao = None
+                resetar_busca()
+                modo = "procurando"
+                falhas_seguidas = 0  # ciclo completo com sucesso -> zera o contador
 
-    cv2.putText(annotated, f"Modo: {modo}", (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-    cv2.putText(annotated, f"Base: {angulo_atual['base']}", (20, 80),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+        except (Exception, SystemExit):
+            falhas_seguidas += 1
+            print(f"\n[ALERTA] Comunicacao com o Arduino caiu durante a operacao "
+                  f"(falha {falhas_seguidas}/{MAX_FALHAS_SEGUIDAS}).")
+            print("Causa mais comum: RESET do Arduino por queda de tensao (brownout) dos servos.")
+            traceback.print_exc()
 
-    cv2.imshow("ROBO", annotated)
+            if falhas_seguidas >= MAX_FALHAS_SEGUIDAS:
+                print("\nFalhas demais seguidas -> parando. Verifique a ALIMENTACAO dos servos "
+                      "(fonte externa 5-6V dedicada + GND comum com o Arduino).")
+                break
 
-    if cv2.waitKey(1) & 0xFF == 27:
-        break
+            print("Tentando reconectar e voltar a procurar...")
+            if not recuperar_board():
+                print("Nao consegui reconectar -> parando.")
+                break
+            ultima_deteccao = None
+            resetar_busca()
+            modo = "procurando"
+            print("Reconectado! Voltando a procurar...")
 
-# =========================
-# FINALIZACAO
-# =========================
-cap.release()
-cv2.destroyAllWindows()
-board.shutdown()
+        cv2.putText(annotated, f"Modo: {modo}", (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+        cv2.putText(annotated, f"Base: {angulo_atual['base']}", (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+
+        cv2.imshow("ROBO", annotated)
+
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+
+except KeyboardInterrupt:
+    print("\nInterrompido pelo usuario (Ctrl+C).")
+
+except Exception:
+    # erro inesperado (nao relacionado a placa): mostra e segura a janela pra dar tempo de ler
+    print("\n==================== ERRO INESPERADO ====================")
+    traceback.print_exc()
+    print("========================================================")
+    input("Pressione ENTER para fechar...")
+
+finally:
+    # =========================
+    # FINALIZACAO (sempre roda: erro, ESC ou fim normal)
+    # =========================
+    desligar_todos()  # corta o PWM pra nao deixar servo forcando/aquecendo
+    try:
+        cap.release()
+    except Exception:
+        pass
+    cv2.destroyAllWindows()
+    try:
+        board.shutdown()
+    except (Exception, SystemExit):
+        pass
