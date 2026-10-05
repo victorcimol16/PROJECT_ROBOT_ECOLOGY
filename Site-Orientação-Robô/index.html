@@ -8,6 +8,8 @@
 </head>
 <body>
   <main class="container">
+    <!-- ===== COLUNA ESQUERDA: MAPA E CHAMADA ===== -->
+    <div class="coluna coluna-esquerda">
     <header class="cabecalho">
       <h1>Chamar Robo</h1>
       <p class="escola">ETEC Estadual Monteiro Lobato</p>
@@ -40,6 +42,85 @@
     <footer class="rodape">
       <p>Prototipo - TCC</p>
     </footer>
+    </div><!-- /coluna-esquerda -->
+
+    <!-- ===== COLUNA DIREITA: SOBRE E FORMULARIO (rolavel) ===== -->
+    <div class="coluna coluna-direita">
+    <!-- ===== SOBRE O PROJETO ===== -->
+    <section class="sobre">
+      <h2>Sobre o projeto</h2>
+      <p class="sobre-texto">
+        A gestao inadequada de residuos reciclaveis constitui um problema
+        ambiental persistente, que se reproduz no ambiente escolar, onde o
+        descarte incorreto compromete a qualidade dos espacos de convivencia.
+        Diante disso, este trabalho teve como objetivo estabelecer os requisitos
+        tecnicos, funcionais e operacionais para a construcao de um dispositivo
+        movel autonomo capaz de identificar e recolher esses materiais no
+        ambiente escolar, conduzindo-os a base de descarte. Adotou-se como
+        metodo central a Revisao Sistematica da Literatura, estruturada em dez
+        questoes de pesquisa distribuidas em quatro eixos analiticos, voltados
+        as solucoes existentes, as tecnicas empregadas, aos resultados
+        alcancados e ao impacto social e educacional. Complementarmente,
+        realizou-se pesquisa de campo diagnostica de abordagem mista, com
+        questionario aplicado a 58 estudantes e egressos, tratado por
+        estatistica descritiva, e entrevistas semiestruturadas com a equipe de
+        limpeza e a direcao, submetidas a analise de conteudo. A revisao mostrou
+        que as solucoes existentes se concentram na triagem industrial e na
+        coleta aquatica, com predominio da deteccao por modelos YOLO e da
+        navegacao reativa, pouco adequada a espacos que mudam de disposicao,
+        alem de evidenciar a escassez de solucoes voltadas a ambientes internos
+        de ensino. O diagnostico apontou as embalagens de lanche, o papel e as
+        garrafas PET como os itens mais descartados incorretamente, a falta de
+        conscientizacao ambiental como causa central e o ginasio e a
+        arquibancada como pontos criticos; 96% dos participantes reconheceram o
+        potencial da tecnologia, e a direcao autorizou testes piloto no espaco
+        escolar. A partir desses subsidios, definiu-se como plataforma um chassi
+        de esteiras com quatro flippers, bracos articulados que auxiliam na
+        transposicao dos degraus e desniveis da arquibancada. O processamento
+        ocorre de forma embarcada em um Raspberry Pi 4, que executa um modelo
+        compacto da familia YOLO (You Only Look Once) para a deteccao dos
+        residuos, e a coleta e realizada por uma garra equipada com sensor
+        ultrassonico, que mede a distancia ate o objeto e valida o acionamento.
+        Para a navegacao, adotou-se a localizacao e mapeamento simultaneos
+        (SLAM), permitindo que o prototipo mapeie um ambiente em constante
+        alteracao e retorne autonomamente a base. A selecao priorizou
+        componentes acessiveis e software de codigo aberto, a fim de viabilizar
+        o baixo custo. Conclui-se que a articulacao entre a literatura e o
+        diagnostico local permitiu fundamentar cada decisao de projeto em
+        evidencias. A pesquisa segue com a montagem fisica do prototipo e testes
+        piloto no ginasio, que avaliarao o desempenho da deteccao, da coleta e
+        da navegacao autonoma.
+      </p>
+    </section>
+
+    <!-- ===== FORMULARIO DE PROBLEMAS E DUVIDAS ===== -->
+    <section class="formulario">
+      <h2>Relatar problema ou duvida</h2>
+      <form id="formRelato" novalidate>
+        <label for="nome">Nome</label>
+        <input type="text" id="nome" name="nome" placeholder="Seu nome" required>
+
+        <label for="tipo">Tipo</label>
+        <select id="tipo" name="tipo" required>
+          <option value="Problema">Problema</option>
+          <option value="Duvida">Duvida</option>
+        </select>
+
+        <label for="mensagem">Mensagem</label>
+        <textarea id="mensagem" name="mensagem" rows="4"
+                  placeholder="Descreva o problema ou a duvida" required></textarea>
+
+        <button type="submit" class="botao-enviar">ENVIAR</button>
+        <p id="avisoForm" class="aviso-form"></p>
+      </form>
+
+      <div class="lista-relatos">
+        <h3>Relatos enviados</h3>
+        <ul id="listaRelatos"></ul>
+        <button type="button" id="limparRelatos" class="botao-limpar">Limpar tudo</button>
+      </div>
+    </section>
+    </div><!-- /coluna-direita -->
   </main>
 
   <script src="script.js"></script>
